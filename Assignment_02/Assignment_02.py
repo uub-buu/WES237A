@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[3]:
 
 
-from pynq.overlays.base import BaseOverlay
+# python imports
 import threading
 import time
+import random
 from queue import PriorityQueue
-from itertools import count
+# pynq imports
+from pynq.overlays.base import BaseOverlay
 import pynq.lib.rgbled as rgbled
 
 base = BaseOverlay("base.bit")
@@ -30,7 +32,9 @@ class philosopher(object):
         else:
             #self.led = led(led_i)
             self.led = base.leds[led_i]
-
+        self.nap_duration = random.randint(1,6)
+        self.eat_duration = random.randint(self.nap_duration, 8)
+        self.starve_count = 0
         self._index = led_i
         print(f"Philosopher {led_i} is at the table")
 
@@ -39,54 +43,55 @@ class philosopher(object):
             left_fork.acquire()
             right_fork.acquire()
             # begin eating for a 5 sec duration
-            self.eating(3)
+            self.eating(self.eat_duration)
             # once duraiton is finished,release fork resources
             left_fork.release()
             right_fork.release()
             # take a nap
-            self.napping(1)
-            time.sleep(0) #yield
+            self.napping(self.nap_duration)
         else:
             # otherwise we are starving.
             self.starving()
-
-
+            self.starve_count+=1 #used for tracking starvation count. 
+        time.sleep(1) #yield
 
     #function to simulate eating
     def eating(self, duration):
-        cycle_duration = 0.5
-        #print(f"led{self._index} is eating\n")
+        toggle_rate = 0.5
         while(duration != 0):
 
-            self._toggle(cycle_duration)
-            duration -= cycle_duration
+            self._toggle(toggle_rate)
+            duration -= toggle_rate
            
     #fucntion to simulate napping
     def napping(self, duration):
-        cycle_duration = 1
-        #print(f"led{self._index} is napping\n")
+        toggle_rate = 1
         while(duration != 0):
-            self._toggle(cycle_duration)
-            duration -= cycle_duration
+            self._toggle(toggle_rate)
+            duration -= toggle_rate
    
     #function to simulate starving
     def starving(self):            
-        #print(f"led{self._index} is starving\n")
         self.led.off()
    
     # toggle the led for a cycle of the specified duration            
-    def _toggle(self, duration):
+    def _toggle(self, toggle_rate):
         if self._index == 4:
             self.led.on(0x02) # uncomment when working on pynq
             #self.led.on()
         else:
             self.led.on()
-        time.sleep(duration/2)
+        time.sleep(toggle_rate/2)
         self.led.off()
-        time.sleep(duration/2)
+        time.sleep(toggle_rate/2)
+    
+    #calculate the total consumption time by philosopher
+    def consumption(self):
+        return (self.eat_duration - self.nap_duration - self.starve_count)
+        
 
 
-# In[3]:
+# In[4]:
 
 
 # initialize the fork resources in question
@@ -100,11 +105,16 @@ philos = []
 for p_index in range(MAX_PHILOS):
     p = philosopher(p_index)
     philos.append(p)
-
+    
 def monitor(philos: philosopher, left_fork:threading.Lock, right_fork:threading.Lock, button_event: threading.Event): #add threading.Event
-    while not button_event.is_set(): # replace with threading.Event     
+    while not button_event.is_set():
+        # if philosopher has spent more time consuming resources
+        # add a delay equal to the amount of eating done
+        if(philos.consumption() > 0):
+            time.sleep(philos.consumption())
+            
         # left and right are needed to eat
-        if(not left_fork.locked() and not right_fork.locked()):
+        if not left_fork.locked() and not right_fork.locked():
             allowed=True
         else:
             allowed =False
@@ -120,7 +130,7 @@ def stop_button(button_event: threading.Event):
             button_event.set()
 
 
-# In[4]:
+# In[5]:
 
 
 threads = []
