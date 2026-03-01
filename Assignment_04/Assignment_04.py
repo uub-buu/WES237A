@@ -1,69 +1,75 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[11]:
+# In[1]:
 
 
 from pynq.overlays.base import BaseOverlay
-import time
-import threading
-import multiprocessing
-import socket
+import time, os, multiprocessing, socket, struct
 from datetime import datetime
 base = BaseOverlay("base.bit")
 btns = base.btns_gpio
-leds = base.leds
 
 
-# In[12]:
+# In[2]:
 
 
 get_ipython().run_cell_magic('microblaze', 'base.PMODB', '#include "gpio.h"\n#include "pyprintf.h"\n\n//Function to turn on/off a selected pin of PMODB\nvoid write_gpio(unsigned int pin, unsigned int val){\n    if (val > 1){\n        pyprintf("pin value must be 0 or 1\\n");\n    }\n    gpio pin_out = gpio_open(pin);\n    gpio_set_direction(pin_out, GPIO_OUT);\n    gpio_write(pin_out, val);\n}\n\n//Function to read the value of a selected pin of PMODB\nunsigned int read_gpio(unsigned int pin){\n    gpio pin_in = gpio_open(pin);\n    gpio_set_direction(pin_in, GPIO_IN);\n    return gpio_read(pin_in);\n}\n')
 
 
-# In[51]:
+# In[3]:
 
 
 def trigger_tone(data_pin: int, freq:float):
     ON = 1 
     OFF = 0
     
-    if(freq >= 0.0):
+    if(freq <= 0.0):
         print("Error: Frequency must be greater than zero.")
 
     write_gpio(data_pin,ON)
-    time.sleep(1.0 / (2 * freq))
+    time.sleep(1.0 / (2.0 * freq))
     write_gpio(data_pin,OFF)
-    time.sleep(1.0 / (2 * freq))
+    time.sleep(1.0 / (2.0 * freq))
 
 
-# In[53]:
+# In[4]:
 
 
 def client_connect(ip: str, port: int, sock: socket.socket):
-    data = b'3' # we will be sending the integer representation of the pmod data data pin
+    tone_data = b'3' # we will be sending the integer representation of the pmod data data pin
+    stop_data = b'0'
     connected = False
-    while(True):
+    button_pressed = False
+    while True:
+        #only process buttons when a new button is pressed
+        #should handle debouncing
         value = btns.read()
-        if value == 1: #0001
-            # connect to server
-            if not connected:
-                try:
-                    sock.connect((ip, port))
-                    connected = True
-                except:
-                    sock.close()
-        if value == 2: #0010
-            # send tone
-            sock.sendall(data)
-        if value == 4: #0100
-            # disconnect from server
-            sock.close()
-            break
-        
+        if value != 0 and button_pressed == False:
+            button_pressed = True
+            if value == 1: #0001
+                # connect to server
+                if not connected:
+                    try:
+                        sock.connect((ip, port))
+                        connected = True
+                        print(f"pynq client connected to local host server: {ip}")
+                    except:
+                        sock.close()
+            if value == 2: #0010
+                # send tone
+                sock.sendall(tone_data)
+            if value == 4: #0100
+                # disconnect from server
+                print(f"Closing connection to local client: {ip}")
+                sock.sendall(stop_data)
+                sock.close()
+                break
+        elif value == 0:
+            button_pressed = False
 
 
-# In[49]:
+# In[5]:
 
 
 #server code
@@ -73,25 +79,26 @@ def server_connect(address, port: int, sock: socket.socket):
     sock.listen(1)
     # 2: Accept connections
     conn, addr = sock.accept()
-    print(f"Connected by  {addr}")
+    print(f"Connected pynq server to local host client: 192.168.2.1")
     # 3: Receive bytes from the connection
     while True:
-        data = conn.recv(4) # we only care about receive 4 bytes
-    # 4: Print the received message
-        if data == b"":
+        data = conn.recv(1) # we only care about receiving 4 bytes
+        # 4: Print the received message
+        print(f"pynq server receiving data: {data}")
+        if data == b'0':
             # client disconnected
-            conn.close()
+            sock.close()
+            print(f"Closing pynq server connection to local host client: 192.168.2.1")
             break
-        else:
-            print(data)
+        if data == b'3':
             #extract data bit as integer value
-            value = struct.unpack("!I", data)[0]
+            value = int(data.decode("ascii"))
             trigger_tone(value,0.5)
         
     sock.close()
 
 
-# In[52]:
+# In[6]:
 
 
 # multiproces code example
@@ -107,7 +114,7 @@ def main():
 
     # Launch process2 on CPU1
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    p2 = multiprocessing.Process(target=client_connect, args=(<client_ip>, 12345, client_socket)) # the first arg defines which CPU to run the 'target' on
+    p2 = multiprocessing.Process(target=client_connect, args=('192.168.2.1', 54321, client_socket)) # the first arg defines which CPU to run the 'target' on
     os.system("taskset -p -c {} {}".format(1, p2.pid)) # taskset is an os command to pin the process to a specific CPU
     p2.start() # start the process
     procs.append(p2)
@@ -123,7 +130,7 @@ def main():
     print('Process 2 with name, {}, is finished'.format(p2Name))
 
 
-# In[ ]:
+# In[7]:
 
 
 main()
